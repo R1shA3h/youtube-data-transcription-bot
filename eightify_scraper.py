@@ -90,7 +90,7 @@ def get_eightify_extension_id():
         print(f"Error finding Eightify extension ID: {e}")
         return []
 
-def scrape_eightify_data(youtube_url, keep_browser_open=True, close_existing=False):
+def scrape_eightify_data(youtube_url, close_existing=False):
     """
     Scrape all data produced by Eightify extension for a YouTube video
     
@@ -338,8 +338,7 @@ def scrape_eightify_data(youtube_url, keep_browser_open=True, close_existing=Fal
                 "top_comments": "",
                 "transcript": ""
             }
-            
-            # Try to find the iframe by common selectors
+    
             iframe_selectors = [
                 "#eightify-iframe",
                 "iframe[title*='Eightify']",
@@ -362,9 +361,6 @@ def scrape_eightify_data(youtube_url, keep_browser_open=True, close_existing=Fal
                     
                                     # Switch to the iframe
                                     driver.switch_to.frame(iframe)
-                                    
-                                    # First look for a primary "Summarize Video" button that might be visible
-                                    # before any tabs are accessible
                                     try:
                                         main_summarize_selectors = [
                                             "//button[contains(text(), 'Summarize Video')]",
@@ -424,8 +420,7 @@ def scrape_eightify_data(youtube_url, keep_browser_open=True, close_existing=Fal
                                             pass
                                     except Exception as btn_error:
                                         print(f"Error handling summarize button: {btn_error}")
-                                    
-                                    # Check if there are tabs for navigation
+                            
                                     tab_data = {}
                                     
                                     try:
@@ -456,7 +451,6 @@ def scrape_eightify_data(youtube_url, keep_browser_open=True, close_existing=Fal
                                                     driver.execute_script("arguments[0].click();", tab)
                                                     time.sleep(5)  # Wait for tab content to load
                                                     
-                                                    # Look for and click "Summarize Video" button
                                                     summarize_selectors = [
                                                         "//button[contains(text(), 'Summarize Video')]",
                                                         "//button[contains(text(), 'Summarize')]",
@@ -478,10 +472,10 @@ def scrape_eightify_data(youtube_url, keep_browser_open=True, close_existing=Fal
                                                             
                                                         try:
                                                             if btn_selector.startswith("//"):
-                                                                # XPath selector
+                                                                
                                                                 buttons = driver.find_elements(By.XPATH, btn_selector)
                                                             else:
-                                                                # CSS selector
+                                                                
                                                                 buttons = driver.find_elements(By.CSS_SELECTOR, btn_selector)
                                                                 
                                                             for button in buttons:
@@ -497,9 +491,6 @@ def scrape_eightify_data(youtube_url, keep_browser_open=True, close_existing=Fal
                                                     
                                                     if not button_clicked:
                                                         print(f"Could not find 'Summarize Video' button in {tab_type} tab")
-                                                        
-                                                    # Take screenshot after attempting to click the button
-                                                    # driver.save_screenshot(f"{tab_type}_after_button_click.png")
                                                         
                                                 except Exception as tab_error:
                                                     print(f"Error accessing tab {i}: {tab_error}")
@@ -535,10 +526,7 @@ def scrape_eightify_data(youtube_url, keep_browser_open=True, close_existing=Fal
                                                     # Click the tab
                                                     print(f"Clicking tab for: {tab_type}")
                                                     driver.execute_script("arguments[0].click();", tab)
-                                                    time.sleep(5)  # Wait for tab content to load
-                                                    
-                                                    # Now try to extract the content
-                                                    # Try multiple selectors to get tab content
+                                                    time.sleep(5) 
                                                     content_selectors = [
                                                         ".tab-content", 
                                                         ".SummaryTabsView_content__6OYs8",
@@ -1484,16 +1472,17 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"Error loading existing results: {e}")
         
-        # Initialize Chrome only once for all URLs
-        browser_initialized = False
-        first_url = True
-        
         # Store the driver in the global variable
         def capture_driver(driver):
             global global_driver
             global_driver = driver
             return driver
 
+        # Monkey patch the webdriver.Chrome to capture the driver object
+        original_chrome = webdriver.Chrome
+        webdriver.Chrome = lambda *args, **kwargs: capture_driver(original_chrome(*args, **kwargs))
+
+        # Process each URL
         for i, video_url in enumerate(urls_to_process):
             # Skip URLs that have already been processed
             if video_url in all_results:
@@ -1501,47 +1490,79 @@ if __name__ == "__main__":
                 continue
                 
             print(f"\n[{i+1}/{len(urls_to_process)}] Processing: {video_url}")
-            print("\nStarting data extraction...")
             
             # Disable warnings
             import warnings
             warnings.filterwarnings("ignore", category=DeprecationWarning)
             
-            # For the first URL or if browser is invalid, initialize a new browser
-            if first_url or global_driver is None:
-                # Monkey patch the webdriver.Chrome to capture the driver object
-                original_chrome = webdriver.Chrome
-                webdriver.Chrome = lambda *args, **kwargs: capture_driver(original_chrome(*args, **kwargs))
-                
+            # Initialize variables for retry mechanism
+            max_retries = 2
+            retry_count = 0
+            success = False
+            
+            while retry_count <= max_retries and not success:
                 try:
-                    # Process the URL with new browser instance
-                    print("Initializing new Chrome browser...")
-                    if first_url:
+                    # If retry_count > 0, we're in a retry attempt
+                    if retry_count > 0:
+                        print(f"Retry attempt {retry_count}/{max_retries} for {video_url}")
+                        
+                        # Force a new browser instance for retries
+                        if global_driver is not None:
+                            try:
+                                print("Closing existing browser for retry...")
+                                global_driver.quit()
+                            except Exception as close_error:
+                                print(f"Error closing browser: {close_error}")
+                            finally:
+                                global_driver = None
+                    
+                    # Create a new browser instance if needed
+                    if global_driver is None:
+                        print("\nStarting data extraction with new browser instance...")
+                        # Close any existing Chrome instances to avoid conflicts
                         close_existing_chrome(system)
-                    eightify_data = scrape_eightify_data(video_url, keep_browser_open=True, close_existing=first_url)
-                    browser_initialized = True
-                    first_url = False
-                except Exception as browser_init_error:
-                    print(f"Error initializing browser: {browser_init_error}")
-                    browser_initialized = False
-                    eightify_data = {
-                        "video_url": video_url,
-                        "status": "Error",
-                        "message": f"Failed to initialize browser: {str(browser_init_error)}"
-                    }
-            else:
-                # For subsequent URLs, use the existing browser with process_next_url
-                try:
-                    print("Reusing existing browser tab...")
-                    eightify_data = process_next_url(global_driver, video_url)
-                except Exception as tab_error:
-                    print(f"Error with existing tab: {tab_error}")
-                    # Don't try to reinitialize here - just mark as error
-                    eightify_data = {
-                        "video_url": video_url,
-                        "status": "Error", 
-                        "message": f"Error processing in existing tab: {str(tab_error)}"
-                    }
+                        # Initialize a new browser with the first URL
+                        eightify_data = scrape_eightify_data(video_url, keep_browser_open=True, close_existing=True)
+                    else:
+                        # For subsequent URLs, first check if the driver is still responsive
+                        try:
+                            print("Checking if browser is still responsive...")
+                            # Simple operation to check browser responsiveness
+                            _ = global_driver.current_url
+                            # Force a clean state by refreshing the page
+                            global_driver.refresh()
+                            time.sleep(3)
+                            
+                            print("Browser is responsive. Trying to process next URL...")
+                            # Process the URL in the existing browser
+                            eightify_data = process_next_url(global_driver, video_url)
+                        except Exception as driver_error:
+                            print(f"Browser is not responsive: {driver_error}")
+                            print("Creating a new browser instance...")
+                            # If driver is not responsive, recreate it
+                            try:
+                                if global_driver is not None:
+                                    global_driver.quit()
+                            except:
+                                pass
+                            global_driver = None
+                            close_existing_chrome(system)
+                            eightify_data = scrape_eightify_data(video_url, keep_browser_open=True, close_existing=True)
+                    
+                    # Check if extraction was successful
+                    if (eightify_data.get("status") == "Success" or 
+                        any(eightify_data.get(key, "") for key in ["key_insights", "timestamped_summary", "top_comments", "transcript"])):
+                        success = True
+                        print(f"Successfully extracted data for {video_url}")
+                    else:
+                        print(f"Extraction failed: {eightify_data.get('message', 'No error message')}")
+                        retry_count += 1
+                
+                except Exception as extraction_error:
+                    print(f"Error during extraction: {extraction_error}")
+                    retry_count += 1
+                    # Wait before retrying
+                    time.sleep(5)
             
             # Create the data structure for this URL
             url_data = {
@@ -1559,25 +1580,42 @@ if __name__ == "__main__":
                 json.dump(all_results, f, indent=2, ensure_ascii=False)
             print(f"Updated results saved to {output_file}")
             
-            if "error" in eightify_data or eightify_data.get("status") == "Error":
-                print(f"\n❌ Failed to extract data for {video_url}")
+            if not success:
+                print(f"\n❌ Failed to extract data for {video_url} after {max_retries} retries")
             else:
                 print(f"\n✅ Successfully extracted data for {video_url}!")
                 items_found = sum(1 for key, value in url_data.items() if value)
                 print(f"Found data in {items_found}/4 tabs")
             
-            # If we're still processing URLs and our browser is active, open a new tab for the next URL
-            if i < len(urls_to_process) - 1 and global_driver is not None and browser_initialized:
-                try:
-                    # Open a new tab for the next URL instead of initializing a new browser
-                    print(f"Opening new tab for next URL...")
-                    global_driver.execute_script("window.open('');")
-                    # Switch to the new tab (it will be the last one)
+            # Reset browser between videos if needed
+            if not success or i == len(urls_to_process) - 1:
+                continue
+                
+            # Prepare browser for next URL
+            try:
+                # If the browser is working well, create a new tab for the next URL
+                if global_driver is not None:
+                    print(f"Creating a clean new tab for next URL...")
+                    # Create a new tab
+                    global_driver.execute_script("window.open('about:blank', '_blank');")
+                    time.sleep(2)
+                    # Close the old tab
+                    old_handle = global_driver.window_handles[0]
                     global_driver.switch_to.window(global_driver.window_handles[-1])
-                    print(f"Ready to process next URL in new tab...")
-                except Exception as tab_error:
-                    print(f"Error creating new tab: {tab_error}")
-                    print("Will continue in current tab")
+                    global_driver.close()
+                    global_driver.switch_to.window(global_driver.window_handles[0])
+                    time.sleep(2)
+                    print(f"Ready to process next URL in clean tab...")
+            except Exception as tab_error:
+                print(f"Error preparing browser for next URL: {tab_error}")
+                # If we can't create a new tab, try closing the browser to force a new instance next time
+                try:
+                    if global_driver is not None:
+                        global_driver.quit()
+                except:
+                    pass
+                global_driver = None
+                print("Browser reset for next URL")
         
         # Always keep the browser open at the end
         if global_driver is not None:
@@ -1597,7 +1635,7 @@ if __name__ == "__main__":
                         print("Browser was closed externally")
                         break
             except KeyboardInterrupt:
-                print("\nKeyboard interrupt detected.")
+                print("\nKeyboard interrupt detected")
             
     except Exception as e:
         print(f"Error in main program: {e}")
